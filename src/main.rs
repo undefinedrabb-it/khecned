@@ -26,8 +26,8 @@ enum JmpCond {
 
 #[derive(Debug)]
 enum Jmp {
-    Abs(Option<usize>),
-    Cond(JmpCond, Option<usize>),
+    Abs(usize),
+    Cond(JmpCond, usize),
 }
 
 #[derive(Debug)]
@@ -130,14 +130,6 @@ fn main() {
     //         i1 +
     //     end pop hlt";
 
-    // {
-    //     let mut i = 0;
-    //     while i < 10 {
-    //         println!("{}", i);
-    //         i += 1;
-    //     }
-    // }
-
     // simple memory read/write
     // let s = "
     //     i20 memory dbg
@@ -172,19 +164,19 @@ fn main() {
                 inst.push(Ops::Nop);
             }
             "end" => match backtraces.pop().expect("Backtrace empty") {
-                BacktraceType::If(if_addr, else_addr) => {
-                    if let Some(else_inst) = else_addr {
-                        inst[if_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, (else_inst + 1).into()));
-                        inst[else_inst] = Ops::Jmp(Jmp::Abs(inst.len().into()));
+                BacktraceType::If(if_inst, else_inst) => {
+                    if let Some(else_inst) = else_inst {
+                        inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, else_inst + 1));
+                        inst[else_inst] = Ops::Jmp(Jmp::Abs(inst.len()));
                     } else {
-                        inst[if_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len().into()));
+                        inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
                     }
                 }
                 BacktraceType::While(while_addr, do_addr) => {
-                    inst.push(Ops::Jmp(Jmp::Abs(while_addr.into())));
+                    inst.push(Ops::Jmp(Jmp::Abs(while_addr)));
                     inst.push(Ops::Nop);
                     inst[do_addr.expect("Do address not found")] =
-                        Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len().into()));
+                        Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
                 }
             },
             "dbg" => inst.push(Ops::Dbg),
@@ -283,8 +275,7 @@ fn main() {
                 println!();
             }
             Ops::Jmp(Jmp::Abs(addr)) => {
-                let addr = addr.expect("JmpAbs needs an address");
-                vm.goto(addr);
+                vm.goto(*addr);
                 continue;
             }
             Ops::Jmp(Jmp::Cond(c, addr)) => {
@@ -294,8 +285,7 @@ fn main() {
 
                 match (c, v) {
                     (JmpCond::True, Val::Bool(true)) | (JmpCond::False, Val::Bool(false)) => {
-                        let addr = addr.expect("JmpAbs needs an address");
-                        vm.goto(addr);
+                        vm.goto(*addr);
                         continue;
                     }
                     (_, Val::Bool(_)) => {
