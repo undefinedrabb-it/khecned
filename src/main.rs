@@ -74,7 +74,7 @@ enum Ops {
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum BacktraceType {
-    If(usize),
+    If(usize, Option<usize>),
     While(usize, Option<usize>),
 }
 
@@ -99,7 +99,7 @@ impl VM {
 #[allow(unreachable_patterns)]
 fn main() {
     // simple if
-    // let s = "i34 i35 + i0 i1 = if  dbg fi hlt";
+    let s = "i34 i35 + i1 i1 = if  print end hlt";
 
     // simple while
     // let s = "
@@ -114,19 +114,21 @@ fn main() {
     // end pop hlt";
 
     // simple while which prints even numbers
-    let s = "
-        i65
-        while
-            dup 
-            65 
-            i65 i10 +
-            >
-        do
-        i2 over mod bool if
-                dup char print
-            end
-            i1 +
-        end pop hlt";
+    // let s = "
+    //     i65
+    //     while
+    //         dup
+    //         65
+    //         i65 i10 +
+    //         >
+    //     do
+    //     i2 over mod bool if
+    //             dup char print
+    //         else
+    //             dup print
+    //     end
+    //         i1 +
+    //     end pop hlt";
 
     // {
     //     let mut i = 0;
@@ -146,30 +148,45 @@ fn main() {
 
     let mut inst: Vec<Ops> = vec![];
     let mut backtraces: Vec<BacktraceType> = vec![];
-    let mut last_while: Option<usize> = None;
+    let mut last_while_inst: Option<usize> = None;
+    let mut last_if_backtrace: Option<usize> = None;
 
     for w in s.split_whitespace() {
         match w {
             "+" => inst.push(Ops::Add),
             "mod" => inst.push(Ops::Mod),
             "if" => {
-                backtraces.push(BacktraceType::If(inst.len()));
-                inst.push(Ops::Jmp(Jmp::Cond(JmpCond::True, None)));
+                last_if_backtrace = Some(backtraces.len());
+                backtraces.push(BacktraceType::If(inst.len(), None));
+                inst.push(Ops::Nop);
             }
-            "end" => {
-                let addr = backtraces.pop().expect("Backtrace empty");
-                match addr {
-                    BacktraceType::If(if_addr) => {
-                        inst[if_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len().into()));
-                    }
-                    BacktraceType::While(while_addr, do_addr) => {
-                        inst.push(Ops::Jmp(Jmp::Abs(while_addr.into())));
-                        inst.push(Ops::Nop);
-                        inst[do_addr.expect("Do address not found")] =
-                            Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len().into()));
+            "else" => {
+                inst.push(Ops::Nop);
+                if let Some(backtrace_id) = last_if_backtrace {
+                    if let BacktraceType::If(if_inst, _else_inst) = backtraces[backtrace_id] {
+                        backtraces[backtrace_id] = BacktraceType::If(if_inst, inst.len().into());
+                    } else {
+                        panic!("aaaaaaaaaaaa");
                     }
                 }
+                inst.push(Ops::Nop);
             }
+            "end" => match backtraces.pop().expect("Backtrace empty") {
+                BacktraceType::If(if_addr, else_addr) => {
+                    if let Some(else_inst) = else_addr {
+                        inst[if_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, (else_inst + 1).into()));
+                        inst[else_inst] = Ops::Jmp(Jmp::Abs(inst.len().into()));
+                    } else {
+                        inst[if_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len().into()));
+                    }
+                }
+                BacktraceType::While(while_addr, do_addr) => {
+                    inst.push(Ops::Jmp(Jmp::Abs(while_addr.into())));
+                    inst.push(Ops::Nop);
+                    inst[do_addr.expect("Do address not found")] =
+                        Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len().into()));
+                }
+            },
             "dbg" => inst.push(Ops::Dbg),
             "hlt" => inst.push(Ops::Hlt),
             "true" => inst.push(Ops::Push(Val::Bool(true))),
@@ -179,15 +196,14 @@ fn main() {
             ">" => inst.push(Ops::Compare(CompareType::Gt)),
             "over" => inst.push(Ops::Over),
             "while" => {
-                backtraces.push(BacktraceType::While(inst.len(), None));
-                last_while = Some(inst.len());
+                last_while_inst = Some(inst.len());
             }
             "do" => {
                 backtraces.push(BacktraceType::While(
-                    last_while.expect("except while "),
+                    last_while_inst.expect("except while "),
                     (inst.len()).into(),
                 ));
-                inst.push(Ops::Jmp(Jmp::Cond(JmpCond::True, None)));
+                inst.push(Ops::Nop);
             }
             "dup" => inst.push(Ops::Dup),
             "memory" => inst.push(Ops::Memory),
@@ -209,7 +225,7 @@ fn main() {
         }
     }
 
-    // println!("{:?}", inst);
+    println!("{:?}", inst);
     let mut vm = VM::new(inst);
 
     let mut stack: Vec<Val> = vec![];
