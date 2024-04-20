@@ -1,5 +1,12 @@
 #![allow(dead_code)]
 
+use std::process::exit;
+
+
+#[macro_use]
+pub mod tokenizer;
+use crate::tokenizer::{Token, Tokenizer,Loc};
+
 #[derive(Clone, Copy)]
 enum Val {
     Int(i32),
@@ -46,7 +53,6 @@ enum CompareType {
     Le,
 }
 
-#[derive(Debug)]
 enum Ops {
     Memory,
     MemoryWrite,
@@ -70,6 +76,42 @@ enum Ops {
 
     Nop,
     Hlt,
+}
+impl std::fmt::Debug for Ops {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Ops::Add => write!(f, "add"),
+            Ops::Memory => write!(f, "memory"),
+            Ops::Push(v) => write!(f, "push {v:?}"),
+            Ops::MemoryWrite => write!(f, "memoryWrite"),
+            Ops::MemoryRead => write!(f, "memoryRead"),
+            Ops::Pop => write!(f, "pop"),
+            Ops::Dup => write!(f, "dup"),
+            Ops::Over => write!(f, "over"),
+            Ops::Mod => write!(f, "mod"),
+            Ops::Cast(c) => match c {
+                CastType::Bool => write!(f, "cast bool"),
+                CastType::Char => write!(f, "cast char"),
+            },
+            Ops::Compare(c) => match c {
+                CompareType::Eq => write!(f, "eq"),
+                CompareType::Ne => write!(f, "ne"),
+                CompareType::Gt => write!(f, "gt"),
+                CompareType::Ge => write!(f, "ge"),
+                CompareType::Lt => write!(f, "lt"),
+                CompareType::Le => write!(f, "le"),
+            },
+            Ops::Jmp(j) => match j {
+                Jmp::Abs(offset) => write!(f, "jmp {offset}"),
+                Jmp::Cond(JmpCond::False, offset) => write!(f, "jmpFalse {offset}"),
+                Jmp::Cond(JmpCond::True, offset) => write!(f, "jmpTrue {offset}"),
+            },
+            Ops::Dbg => write!(f, "dbg"),
+            Ops::Print => write!(f, "print"),
+            Ops::Nop => write!(f, "nop"),
+            Ops::Hlt => write!(f, "hlt"),
+        }
+    }
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -96,63 +138,17 @@ impl VM {
     }
 }
 
-#[allow(unreachable_patterns)]
-fn main() {
-    // simple if
-    // let s = "
-    // i34 i35 +
-    // i1 i1 = if
-    //     print
-    // end hlt
-    // ";
-
-    // simple while
-    // let s = "
-    // i65
-    // while
-    //     dup
-    //     i65 i10 +
-    //     >
-    // do
-    //     dup char print
-    //     i1 +
-    // end pop hlt
-    // ";
-
-    // simple while which prints even numbers
-    // let s = "
-    // i65
-    // while
-    //     dup
-    //     65
-    //     i65 i10 +
-    //     >
-    // do
-    //     i2 over mod bool if
-    //         dup char print
-    //     else
-    //         dup print
-    //     end
-    //     i1 +
-    // end pop hlt
-    // ";
-
-    // simple memory read/write
-    let s = "
-    i20 memory dbg
-    i2 i10 write
-    i2 read print
-    dbg
-    hlt
-    ";
-
+fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
     let mut inst: Vec<Ops> = vec![];
     let mut last_while_inst: Option<usize> = None;
     let mut backtraces: Vec<BacktraceType> = vec![];
     let mut last_if_backtrace: Option<usize> = None;
 
-    for w in s.split_whitespace() {
-        match w {
+    for token in tokenizer {
+        let value = token.value;
+        let loc = token.loc;
+
+        match value {
             "+" => inst.push(Ops::Add),
             "mod" => inst.push(Ops::Mod),
             "if" => {
@@ -211,20 +207,24 @@ fn main() {
             "char" => inst.push(Ops::Cast(CastType::Char)),
             "bool" => inst.push(Ops::Cast(CastType::Bool)),
             _ => {
-                if w.starts_with("i") {
-                    if let Ok(i) = w[1..].parse::<i32>() {
+                if value.starts_with("i") {
+                    if let Ok(i) = value[1..].parse::<i32>() {
                         inst.push(Ops::Push(Val::Int(i)));
                     } else {
-                        panic!("Invalid word: {}", w);
+                        leprintln!(filename, loc, "invalid integer, got: {}", value);
+                        return Err(());
                     }
                 } else {
-                    panic!("Panic on {w}")
+                    leprintln!(filename, loc, "invalid token, got: {}", value);
+                    return Err(());
                 }
             }
         }
     }
+    Ok(inst)
+}
 
-    println!("{:?}", inst);
+fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
     let mut vm = VM::new(inst);
 
     let mut stack: Vec<Val> = vec![];
@@ -447,10 +447,43 @@ fn main() {
 
         vm.ip += 1;
     }
+    (vm, stack)
+}
+
+#[allow(unreachable_patterns)]
+fn start() -> Result<(), ()> {
+    let path = "example/01.khe";
+    let s = std::fs::read_to_string(path).map_err(|err| {
+        eprintln!("Error: {:?}", err);
+    })?;
+
+    println!("------------");
+    let mut tokenizer = Tokenizer::new(&s);
+    let token = tokenizer.to_vec();
+    token
+        .iter()
+        .for_each(|t| lprintln!(path, t.loc, "`{}`", t.value));
+
+    println!("------------");
+    let inst = lex(path, token)?;
+    inst.iter()
+        .enumerate()
+        .for_each(|(i, s)| println!("{i:>2}: {s:?}"));
+
+    println!("------------");
+    let (vm, stack) = interpret(inst);
 
     println!("------------");
     println!("ip: {}", vm.ip);
     println!("stack: {:?}", stack);
+    return Ok(());
+}
+
+fn main() {
+    match start() {
+        Ok(_) => exit(0),
+        Err(_) => exit(1),
+    }
 }
 
 // TODO: fix error messages on unwrap/expect etc.
