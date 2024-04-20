@@ -1,0 +1,9 @@
+i65
+while
+    dup
+    i65 i10 +
+    >
+do
+    dup char print
+    i1 +
+end pop hlt

@@ -1,0 +1,5 @@
+i20 memory dbg
+i2 i10 write
+i2 read print
+dbg
+hlt

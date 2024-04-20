@@ -1,0 +1,14 @@
+i65
+while
+    dup
+    
+    i65 i10 +
+    >
+do
+    i2 over mod bool if
+        dup char print
+    else
+        dup print
+    end
+    i1 +
+end pop hlt
