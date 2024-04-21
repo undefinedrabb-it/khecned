@@ -1,11 +1,10 @@
 i65
 while
     dup
-    
     i65 i10 +
     >
 do
-    i2 over mod bool if
+    i2 over % bool if
         dup char print
     else
         dup print

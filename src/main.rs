@@ -2,10 +2,9 @@
 
 use std::process::exit;
 
-
 #[macro_use]
 pub mod tokenizer;
-use crate::tokenizer::{Token, Tokenizer,Loc};
+use crate::tokenizer::{Loc, Token, Tokenizer};
 
 #[derive(Clone, Copy)]
 enum Val {
@@ -120,24 +119,6 @@ enum BacktraceType {
     While(usize, usize),
 }
 
-struct VM {
-    inst: Vec<Ops>,
-    ip: usize,
-}
-impl VM {
-    fn new(inst: Vec<Ops>) -> VM {
-        VM { inst, ip: 0 }
-    }
-    fn goto(&mut self, addr: usize) {
-        self.ip = addr;
-    }
-    fn in_bound_ip(&self) -> bool {
-        let c = self.ip < self.inst.len();
-        assert!(c, "IP out of bounds");
-        c
-    }
-}
-
 fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
     let mut inst: Vec<Ops> = vec![];
     let mut last_while_inst: Option<usize> = None;
@@ -150,7 +131,7 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
 
         match value {
             "+" => inst.push(Ops::Add),
-            "mod" => inst.push(Ops::Mod),
+            "%" => inst.push(Ops::Mod),
             "if" => {
                 last_if_backtrace = Some(backtraces.len());
                 backtraces.push(BacktraceType::If(inst.len(), None));
@@ -222,6 +203,24 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
         }
     }
     Ok(inst)
+}
+
+struct VM {
+    inst: Vec<Ops>,
+    ip: usize,
+}
+impl VM {
+    fn new(inst: Vec<Ops>) -> VM {
+        VM { inst, ip: 0 }
+    }
+    fn goto(&mut self, addr: usize) {
+        self.ip = addr;
+    }
+    fn in_bound_ip(&self) -> bool {
+        let c = self.ip < self.inst.len();
+        assert!(c, "IP out of bounds");
+        c
+    }
 }
 
 fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
@@ -452,7 +451,7 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
 
 #[allow(unreachable_patterns)]
 fn start() -> Result<(), ()> {
-    let path = "example/01.khe";
+    let path = "example/mem.khe";
     let s = std::fs::read_to_string(path).map_err(|err| {
         eprintln!("Error: {:?}", err);
     })?;
