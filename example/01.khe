@@ -6,4 +6,4 @@ while
 do
     dup char print
     i1 +
-end pop hlt
+end pop

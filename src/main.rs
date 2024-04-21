@@ -124,6 +124,7 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
     let mut last_while_inst: Option<usize> = None;
     let mut backtraces: Vec<BacktraceType> = vec![];
     let mut last_if_backtrace: Option<usize> = None;
+    let mut hlt_exist = false;
 
     for token in tokenizer {
         let value = token.value;
@@ -164,7 +165,10 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                 }
             },
             "dbg" => inst.push(Ops::Dbg),
-            "hlt" => inst.push(Ops::Hlt),
+            "hlt" => {
+                hlt_exist = true;
+                inst.push(Ops::Hlt);
+            }
             "true" => inst.push(Ops::Push(Val::Bool(true))),
             "false" => inst.push(Ops::Push(Val::Bool(false))),
             "=" => inst.push(Ops::Compare(CompareType::Eq)),
@@ -196,12 +200,16 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                         return ();
                     })?;
                     inst.push(Ops::Push(Val::Int(i)));
+                } else {
+                    leprintln!(filename, loc, "invalid token, got: {}", value);
                 }
-
-                leprintln!(filename, loc, "invalid token, got: {}", value);
             }
         }
     }
+    if !hlt_exist {
+        inst.push(Ops::Hlt)
+    }
+
     Ok(inst)
 }
 
@@ -448,7 +456,7 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
 
 #[allow(unreachable_patterns)]
 fn start() -> Result<(), ()> {
-    let path = "example/mem.khe";
+    let path = "example/01.khe";
     let s = std::fs::read_to_string(path).map_err(|err| {
         eprintln!("Error: {:?}", err);
     })?;
