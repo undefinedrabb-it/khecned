@@ -139,23 +139,23 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
             }
             "else" => {
                 inst.push(Ops::Nop);
-                if let Some(backtrace_id) = last_if_backtrace {
-                    if let BacktraceType::If(if_inst, _else_inst) = backtraces[backtrace_id] {
-                        backtraces[backtrace_id] = BacktraceType::If(if_inst, inst.len().into());
-                    }
-                } else {
-                    panic!("aaaaaaaaaaaa");
+                let backtrace_id = last_if_backtrace.ok_or(()).map_err(|_| {})?;
+                if let BacktraceType::If(if_inst, _else_inst) = backtraces[backtrace_id] {
+                    backtraces[backtrace_id] = BacktraceType::If(if_inst, inst.len().into());
                 }
                 inst.push(Ops::Nop);
             }
-            "end" => match backtraces.pop().expect("Backtrace empty") {
-                BacktraceType::If(if_inst, else_inst) => {
-                    if let Some(else_inst) = else_inst {
-                        inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, else_inst + 1));
-                        inst[else_inst] = Ops::Jmp(Jmp::Abs(inst.len()));
-                    } else {
-                        inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
-                    }
+            "end" => match backtraces
+                .pop()
+                .ok_or(0)
+                .map_err(|_| leprintln!(filename, loc, "end need if/else/while"))?
+            {
+                BacktraceType::If(if_inst, None) => {
+                    inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
+                }
+                BacktraceType::If(if_inst, Some(else_inst)) => {
+                    inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, else_inst + 1));
+                    inst[else_inst] = Ops::Jmp(Jmp::Abs(inst.len()));
                 }
                 BacktraceType::While(while_addr, do_addr) => {
                     inst.push(Ops::Jmp(Jmp::Abs(while_addr)));
@@ -175,7 +175,9 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                 last_while_inst = Some(inst.len());
             }
             "do" => {
-                let last_while_inst = last_while_inst.expect("except while ");
+                let last_while_inst = last_while_inst
+                    .ok_or(())
+                    .map_err(|_| leprintln!(filename, loc, "do need while"))?;
                 backtraces.push(BacktraceType::While(last_while_inst, inst.len()));
                 inst.push(Ops::Nop);
             }
@@ -189,16 +191,14 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
             "bool" => inst.push(Ops::Cast(CastType::Bool)),
             _ => {
                 if value.starts_with("i") {
-                    if let Ok(i) = value[1..].parse::<i32>() {
-                        inst.push(Ops::Push(Val::Int(i)));
-                    } else {
+                    let i = value[1..].parse::<i32>().map_err(|_| {
                         leprintln!(filename, loc, "invalid integer, got: {}", value);
-                        return Err(());
-                    }
-                } else {
-                    leprintln!(filename, loc, "invalid token, got: {}", value);
-                    return Err(());
+                        return ();
+                    })?;
+                    inst.push(Ops::Push(Val::Int(i)));
                 }
+
+                leprintln!(filename, loc, "invalid token, got: {}", value);
             }
         }
     }
@@ -427,17 +427,14 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
                     panic!("Invalid types for MemoryWrite");
                 }
             }
-            Ops::Print => {
-                let v = stack.pop().expect("Stack underflow - Print needs 1 value");
-                match v {
-                    Val::Int(i) => println!("{}", i),
-                    Val::Bool(b) => println!("{}", b),
-                    Val::Char(c) => println!("{}", c),
-                    _ => {
-                        panic!("Invalid types for Print");
-                    }
+            Ops::Print => match stack.pop().expect("Stack underflow - Print needs 1 value") {
+                Val::Int(i) => println!("{}", i),
+                Val::Bool(b) => println!("{}", b),
+                Val::Char(c) => println!("{}", c),
+                _ => {
+                    panic!("Invalid types for Print");
                 }
-            }
+            },
             Ops::Nop => {}
             Ops::Hlt => {
                 break;
