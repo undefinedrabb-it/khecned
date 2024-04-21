@@ -1,0 +1,25 @@
+{
+  "name": "khecned",
+  "displayName": "Khecned",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "khecned",
+      "aliases": ["khecned", "khecned"],
+      "extensions": ["khe"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "khecned",
+      "scopeName": "source.khe",
+      "path": "./syntaxes/khecned.tmLanguage.json"
+    }]
+  }
+}
