@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::process::exit;
+use std::{collections::HashMap, process::exit};
 
 #[macro_use]
 pub mod tokenizer;
@@ -53,10 +53,6 @@ enum CompareType {
 }
 
 enum Ops {
-    Memory,
-    MemoryWrite,
-    MemoryRead,
-
     Push(Val),
     Pop,
     Dup,
@@ -68,10 +64,18 @@ enum Ops {
     Cast(CastType),
     Compare(CompareType),
 
-    Jmp(Jmp),
+    Memory,
+    MemoryWrite,
+    MemoryRead,
+
+    // Fn,
+    FnCall(usize),
+    FnRet,
 
     Dbg,
     Print,
+
+    Jmp(Jmp),
 
     Nop,
     Hlt,
@@ -105,6 +109,8 @@ impl std::fmt::Debug for Ops {
                 Jmp::Cond(JmpCond::False, offset) => write!(f, "jmpFalse {offset}"),
                 Jmp::Cond(JmpCond::True, offset) => write!(f, "jmpTrue {offset}"),
             },
+            Ops::FnCall(fn_inst) => write!(f, "call {fn_inst}"),
+            Ops::FnRet => write!(f, "ret"),
             Ops::Dbg => write!(f, "dbg"),
             Ops::Print => write!(f, "print"),
             Ops::Nop => write!(f, "nop"),
@@ -115,24 +121,33 @@ impl std::fmt::Debug for Ops {
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum BacktraceType {
+    Fn(usize),
     If(usize, Option<usize>),
     While(usize, usize),
 }
 
 fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
     let mut inst: Vec<Ops> = vec![];
-    let mut last_while_inst: Option<usize> = None;
+
     let mut backtraces: Vec<BacktraceType> = vec![];
+
+    let mut last_while_inst: Option<usize> = None;
     let mut last_if_backtrace: Option<usize> = None;
+    let mut fns: HashMap<&str, usize> = HashMap::new();
+    // let mut fnsBacktrack: HashMap<&str, Vec<usize>> = HashMap::new();
+
     let mut hlt_exist = false;
 
-    for token in tokenizer {
-        let value = token.value;
-        let loc = token.loc;
-
+    let mut iter = tokenizer.iter().peekable();
+    while let Some(&Token { value, loc }) = iter.next() {
         match value {
+            "pop" => inst.push(Ops::Pop),
+            "dup" => inst.push(Ops::Dup),
+            "over" => inst.push(Ops::Over),
+
             "+" => inst.push(Ops::Add),
             "%" => inst.push(Ops::Mod),
+
             "if" => {
                 last_if_backtrace = Some(backtraces.len());
                 backtraces.push(BacktraceType::If(inst.len(), None));
@@ -144,6 +159,36 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                 if let BacktraceType::If(if_inst, _else_inst) = backtraces[backtrace_id] {
                     backtraces[backtrace_id] = BacktraceType::If(if_inst, inst.len().into());
                 }
+                inst.push(Ops::Nop);
+            }
+            "while" => {
+                last_while_inst = Some(inst.len());
+            }
+            "do" => {
+                let last_while_inst = last_while_inst.ok_or(()).map_err(|_| {
+                    leprintln!(filename, loc, "do need while");
+                    ()
+                })?;
+                backtraces.push(BacktraceType::While(last_while_inst, inst.len()));
+                inst.push(Ops::Nop);
+            }
+            "fn" => {
+                // let p = *iter.peek().ok_or(())?;
+                // TODO: add check if it
+                let name = iter.next().ok_or(()).map_err(|_| {
+                    leprintln!(filename, loc, "function must have name");
+                    ()
+                })?;
+                let in_keyword = iter.next().ok_or(()).map_err(|_| {
+                    leprintln!(filename, loc, "function must have in keyword");
+                    ()
+                })?;
+                if in_keyword.value != "in" {
+                    leprintln!(filename, loc, "function must have in keyword");
+                    return Err(());
+                }
+                fns.insert(&name.value, inst.len() + 1);
+                backtraces.push(BacktraceType::Fn(inst.len()));
                 inst.push(Ops::Nop);
             }
             "end" => match backtraces
@@ -163,41 +208,45 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                     inst.push(Ops::Nop);
                     inst[do_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
                 }
+                BacktraceType::Fn(fn_inst) => {
+                    inst.push(Ops::FnRet);
+                    inst[fn_inst] = Ops::Jmp(Jmp::Abs(inst.len()));
+                }
             },
+
+            "true" => inst.push(Ops::Push(Val::Bool(true))),
+            "false" => inst.push(Ops::Push(Val::Bool(false))),
+
+            "=" => inst.push(Ops::Compare(CompareType::Eq)),
+            "<" => inst.push(Ops::Compare(CompareType::Lt)),
+            ">" => inst.push(Ops::Compare(CompareType::Gt)),
+
+            "memory" => inst.push(Ops::Memory),
+            "write" => inst.push(Ops::MemoryWrite),
+            "read" => inst.push(Ops::MemoryRead),
+
+            "char" => inst.push(Ops::Cast(CastType::Char)),
+            "bool" => inst.push(Ops::Cast(CastType::Bool)),
+
             "dbg" => inst.push(Ops::Dbg),
+            "print" => inst.push(Ops::Print),
+
             "hlt" => {
                 hlt_exist = true;
                 inst.push(Ops::Hlt);
             }
-            "true" => inst.push(Ops::Push(Val::Bool(true))),
-            "false" => inst.push(Ops::Push(Val::Bool(false))),
-            "=" => inst.push(Ops::Compare(CompareType::Eq)),
-            "<" => inst.push(Ops::Compare(CompareType::Lt)),
-            ">" => inst.push(Ops::Compare(CompareType::Gt)),
-            "over" => inst.push(Ops::Over),
-            "while" => {
-                last_while_inst = Some(inst.len());
-            }
-            "do" => {
-                let last_while_inst = last_while_inst
-                    .ok_or(())
-                    .map_err(|_| leprintln!(filename, loc, "do need while"))?;
-                backtraces.push(BacktraceType::While(last_while_inst, inst.len()));
-                inst.push(Ops::Nop);
-            }
-            "dup" => inst.push(Ops::Dup),
-            "memory" => inst.push(Ops::Memory),
-            "write" => inst.push(Ops::MemoryWrite),
-            "read" => inst.push(Ops::MemoryRead),
-            "pop" => inst.push(Ops::Pop),
-            "print" => inst.push(Ops::Print),
-            "char" => inst.push(Ops::Cast(CastType::Char)),
-            "bool" => inst.push(Ops::Cast(CastType::Bool)),
+
             _ => {
+                // TODO: add fn backtrack
+                if let Some(&id) = fns.get(value) {
+                    inst.push(Ops::FnCall(id));
+                    inst.push(Ops::Nop);
+                } else
+                // TODO: change it to trailing
                 if value.starts_with("i") {
                     let i = value[1..].parse::<i32>().map_err(|_| {
                         leprintln!(filename, loc, "invalid integer, got: {}", value);
-                        return ();
+                        ()
                     })?;
                     inst.push(Ops::Push(Val::Int(i)));
                 } else {
@@ -231,14 +280,23 @@ impl VM {
     }
 }
 
-fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
+fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
     let mut vm = VM::new(inst);
 
     let mut stack: Vec<Val> = vec![];
     let mut memory: Vec<Vec<i32>> = vec![];
 
+    let mut stacktrace: Vec<usize> = vec![];
+
     while vm.in_bound_ip() {
+        // println!("ip {:?}: {:?}", vm.ip, vm.inst[vm.ip]);
         match &vm.inst[vm.ip] {
+            Ops::Push(val) => {
+                stack.push(*val);
+            }
+            Ops::Pop => {
+                stack.pop().expect("Stack underflow - Pop needs 1 value");
+            }
             Ops::Dup => {
                 let val = stack.last().expect("Stack underflow - Dup needs 1 value");
                 let val = match val {
@@ -249,6 +307,14 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
                 };
                 stack.push(val);
             }
+            Ops::Over => {
+                let v = stack
+                    .get(stack.len() - 2)
+                    .expect("Stack underflow - Over needs 2 values")
+                    .clone();
+                stack.push(v);
+            }
+
             Ops::Add => {
                 let l = stack.pop().expect("Stack underflow - Add needs 2 values");
                 let r = stack.pop().expect("Stack underflow - Add needs 2 values");
@@ -273,16 +339,21 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
                     }
                 }
             }
-            Ops::Push(val) => {
-                stack.push(*val);
+
+            Ops::FnCall(fn_inst) => {
+                stacktrace.push(vm.ip + 1);
+                vm.goto(*fn_inst);
+                continue;
             }
-            Ops::Over => {
-                let v = stack
-                    .get(stack.len() - 2)
-                    .expect("Stack underflow - Over needs 2 values")
-                    .clone();
-                stack.push(v);
+            Ops::FnRet => {
+                let ret_to_inst = stacktrace.pop().ok_or(()).map_err(|_| {
+                    eprintln!("Ip:{} - Stacktrace underflow ", vm.ip);
+                    ()
+                })?;
+                vm.goto(ret_to_inst + 1);
+                continue;
             }
+
             Ops::Dbg => {
                 let v = stack.last();
                 print!("{:?}", v);
@@ -376,9 +447,6 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
                     }
                 }
             }
-            Ops::Pop => {
-                stack.pop().expect("Stack underflow - Pop needs 1 value");
-            }
             Ops::Memory => {
                 let addr = stack
                     .pop()
@@ -451,12 +519,12 @@ fn interpret(inst: Vec<Ops>) -> (VM, Vec<Val>) {
 
         vm.ip += 1;
     }
-    (vm, stack)
+    Ok((vm, stack))
 }
 
 #[allow(unreachable_patterns)]
 fn start() -> Result<(), ()> {
-    let path = "example/01.khe";
+    let path = "example/03.khe";
     let s = std::fs::read_to_string(path).map_err(|err| {
         eprintln!("Error: {:?}", err);
     })?;
@@ -475,7 +543,7 @@ fn start() -> Result<(), ()> {
         .for_each(|(i, s)| println!("{i:>2}: {s:?}"));
 
     println!("------------");
-    let (vm, stack) = interpret(inst);
+    let (vm, stack) = interpret(inst)?;
 
     println!("------------");
     println!("ip: {}", vm.ip);

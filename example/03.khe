@@ -1,0 +1,18 @@
+
+fn main in 
+    i65
+    while
+        dup
+        i65 i10 +
+        >
+    do
+        i2 over % bool if
+            dup char print
+        else
+            dup print
+        end
+        i1 +
+    end pop
+end
+
+main
