@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(let_chains)]
 
 use std::{collections::HashMap, process::exit};
 
@@ -179,12 +180,10 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                     leprintln!(filename, loc, "function must have name");
                     ()
                 })?;
-                let in_keyword = iter.next().ok_or(()).map_err(|_| {
-                    leprintln!(filename, loc, "function must have in keyword");
-                    ()
-                })?;
-                if in_keyword.value != "in" {
-                    leprintln!(filename, loc, "function must have in keyword");
+                if let Some(in_keyword) = iter.next()
+                    && in_keyword.value != "in"
+                {
+                    leprintln!(filename, loc, "function must have `in` keyword");
                     return Err(());
                 }
                 fns.insert(&name.value, inst.len() + 1);
@@ -241,14 +240,13 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                 if let Some(&id) = fns.get(value) {
                     inst.push(Ops::FnCall(id));
                     inst.push(Ops::Nop);
-                } else
-                // TODO: change it to trailing
-                if value.starts_with("i") {
-                    let i = value[1..].parse::<i32>().map_err(|_| {
+                } else if value.ends_with("i")
+                    && let Ok(ops) = value[..value.len() - 1].parse::<i32>().map_err(|_| {
                         leprintln!(filename, loc, "invalid integer, got: {}", value);
                         ()
-                    })?;
-                    inst.push(Ops::Push(Val::Int(i)));
+                    })
+                {
+                    inst.push(Ops::Push(Val::Int(ops)));
                 } else {
                     leprintln!(filename, loc, "invalid token, got: {}", value);
                 }
@@ -472,16 +470,11 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
                 let addr = stack
                     .last()
                     .expect("Stack underflow - MemoryWrite needs 3 values");
-                if let Val::Addr(addr) = addr {
-                    if let Val::Int(id) = id {
-                        if let Val::Int(val) = val {
-                            memory[*addr][id as usize] = val;
-                        } else {
-                            panic!("Invalid types for MemoryWrite");
-                        }
-                    } else {
-                        panic!("Invalid types for MemoryWrite");
-                    }
+                if let Val::Addr(addr) = addr
+                    && let Val::Int(id) = id
+                    && let Val::Int(val) = val
+                {
+                    memory[*addr][id as usize] = val;
                 } else {
                     panic!("Invalid types for MemoryWrite");
                 }
@@ -493,12 +486,11 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
                 let addr = stack
                     .last()
                     .expect("Stack underflow - MemoryWrite needs 2 values");
-                if let Val::Addr(addr) = addr {
-                    if let Val::Int(id) = id {
-                        stack.push(Val::Int(memory[*addr][id as usize]));
-                    } else {
-                        panic!("Invalid types for MemoryWrite");
-                    }
+
+                if let Val::Addr(addr) = addr
+                    && let Val::Int(id) = id
+                {
+                    stack.push(Val::Int(memory[*addr][id as usize]));
                 } else {
                     panic!("Invalid types for MemoryWrite");
                 }
@@ -524,7 +516,7 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
 
 #[allow(unreachable_patterns)]
 fn start() -> Result<(), ()> {
-    let path = "example/03.khe";
+    let path = "example/mem.khe";
     let s = std::fs::read_to_string(path).map_err(|err| {
         eprintln!("Error: {:?}", err);
     })?;

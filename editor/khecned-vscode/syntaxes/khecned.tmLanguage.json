@@ -15,7 +15,7 @@
 		},
 		{
 			"name": "constant.numeric.khecned",
-			"match": "\\b(i(?:[0-9]+))\\b"
+			"match": "\\b((?:[0-9]+)i)\\b"
 		},
 		{
 			"name": "constant.language.khecned",

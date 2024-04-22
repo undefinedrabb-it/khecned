@@ -1,5 +1,5 @@
-i20 memory dbg
-i2 i10 write
-i2 read print
+20i memory dbg
+2i 10i write
+2i read print
 dbg
 hlt

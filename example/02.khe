@@ -1,13 +1,13 @@
-i65
+65i
 while
     dup
-    i65 i10 +
+    65i 10i +
     >
 do
-    i2 over % bool if
+    2i over % bool if
         dup char print
     else
         dup print
     end
-    i1 +
+    1i +
 end pop hlt

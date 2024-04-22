@@ -1,9 +1,9 @@
-i65
+65i
 while
     dup
-    i65 i10 +
+    65i 10i +
     >
 do
     dup char print
-    i1 +
+    1i +
 end pop
