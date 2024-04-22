@@ -127,15 +127,19 @@ enum BacktraceType {
     While(usize, usize),
 }
 
-fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
+struct LexConf {
+    panic_on_first_error: bool,
+}
+fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<Vec<Ops>, ()> {
     let mut inst: Vec<Ops> = vec![];
 
     let mut backtraces: Vec<BacktraceType> = vec![];
 
     let mut last_while_inst: Option<usize> = None;
     let mut last_if_backtrace: Option<usize> = None;
+
     let mut fns: HashMap<&str, usize> = HashMap::new();
-    // let mut fnsBacktrack: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut fns_backtracks: HashMap<&str, Vec<(usize, Loc)>> = HashMap::new();
 
     let mut hlt_exist = false;
 
@@ -236,9 +240,9 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
             }
 
             _ => {
-                // TODO: add fn backtrack
                 if let Some(&id) = fns.get(value) {
                     inst.push(Ops::FnCall(id));
+                    // TODO: verify if it's possible remove that nop
                     inst.push(Ops::Nop);
                 } else if value.ends_with("i")
                     && let Ok(ops) = value[..value.len() - 1].parse::<i32>().map_err(|_| {
@@ -248,11 +252,39 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>) -> Result<Vec<Ops>, ()> {
                 {
                     inst.push(Ops::Push(Val::Int(ops)));
                 } else {
-                    leprintln!(filename, loc, "invalid token, got: {}", value);
+                    if let Some(fns_backtrack) = fns_backtracks.get_mut(value) {
+                        fns_backtrack.push((inst.len(), loc));
+                    } else {
+                        fns_backtracks.insert(value, vec![(inst.len(), loc)]);
+                    }
+                    inst.push(Ops::Nop);
+                    inst.push(Ops::Nop);
                 }
             }
         }
     }
+
+    let mut any_fns_backtrack_error = false;
+    for (name, fns_backtrack_insts) in fns_backtracks {
+        let fn_inst = fns.get(name);
+        for (fns_backtrack_inst, loc) in fns_backtrack_insts {
+            if let Some(fn_inst) = fn_inst {
+                inst[fns_backtrack_inst] = Ops::FnCall(*fn_inst);
+            } else {
+                if conf.panic_on_first_error {
+                    leprintln!(filename, loc, "function not found: {}", name);
+                    return Err(());
+                } else {
+                    any_fns_backtrack_error = true;
+                }
+                leprintln!(filename, loc, "invalid token, got: {}", name);
+            }
+        }
+    }
+    if any_fns_backtrack_error {
+        return Err(());
+    }
+
     if !hlt_exist {
         inst.push(Ops::Hlt)
     }
@@ -344,6 +376,7 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
                 continue;
             }
             Ops::FnRet => {
+                // println!("{:?}", stacktrace);
                 let ret_to_inst = stacktrace.pop().ok_or(()).map_err(|_| {
                     eprintln!("Ip:{} - Stacktrace underflow ", vm.ip);
                     ()
@@ -516,7 +549,7 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
 
 #[allow(unreachable_patterns)]
 fn start() -> Result<(), ()> {
-    let path = "example/mem.khe";
+    let path = "example/03.khe";
     let s = std::fs::read_to_string(path).map_err(|err| {
         eprintln!("Error: {:?}", err);
     })?;
@@ -529,7 +562,13 @@ fn start() -> Result<(), ()> {
         .for_each(|t| lprintln!(path, t.loc, "`{}`", t.value));
 
     println!("------------");
-    let inst = lex(path, token)?;
+    let inst = lex(
+        path,
+        token,
+        &LexConf {
+            panic_on_first_error: false,
+        },
+    )?;
     inst.iter()
         .enumerate()
         .for_each(|(i, s)| println!("{i:>2}: {s:?}"));
