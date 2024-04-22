@@ -4,7 +4,7 @@
 	"patterns": [
 		{
 			"name": "keyword.control.khecned",
-			"match": "\\b(if|else|while|do|end)\\b"
+			"match": "\\b(if|else|while|do|fn|in|end)\\b"
 		},
 		{
 			"name": "keyword.operator.khecned",
