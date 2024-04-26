@@ -1,10 +1,12 @@
-main1
-main1
+fn upper in 65i end
+
+fn inc in 1i + end
+
 fn main in 
-    65i
+    upper
     while
         dup
-        65i 10i +
+        upper 10i +
         >
     do
         2i over % bool if
@@ -12,7 +14,7 @@ fn main in
         else
             dup print
         end
-        1i +
+        inc
     end pop
 end
 

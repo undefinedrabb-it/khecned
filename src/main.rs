@@ -31,10 +31,36 @@ enum JmpCond {
     False,
 }
 
+struct Rel(i64);
+impl Rel {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let Rel(i) = self;
+        let sign = if *i == 0 {
+            ' '
+        } else if i.is_positive() {
+            '+'
+        } else {
+            '-'
+        };
+        let i = i.abs();
+        write!(f, "{sign}{i}")
+    }
+}
+impl std::fmt::Debug for Rel {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.fmt(f)
+    }
+}
+impl std::fmt::Display for Rel {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.fmt(f)
+    }
+}
+
 #[derive(Debug)]
 enum Jmp {
-    Abs(usize),
-    Cond(JmpCond, usize),
+    Rel(Rel),
+    Cond(JmpCond, Rel),
 }
 
 #[derive(Debug)]
@@ -106,7 +132,7 @@ impl std::fmt::Debug for Ops {
                 CompareType::Le => write!(f, "le"),
             },
             Ops::Jmp(j) => match j {
-                Jmp::Abs(offset) => write!(f, "jmp {offset}"),
+                Jmp::Rel(offset) => write!(f, "jmp {offset}"),
                 Jmp::Cond(JmpCond::False, offset) => write!(f, "jmpFalse {offset}"),
                 Jmp::Cond(JmpCond::True, offset) => write!(f, "jmpTrue {offset}"),
             },
@@ -121,30 +147,45 @@ impl std::fmt::Debug for Ops {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum BacktraceType {
-    Fn(usize),
-    If(usize, Option<usize>),
-    While(usize, usize),
+struct Ip(usize);
+
+impl<T: Into<usize>> std::convert::From<T> for Ip {
+    fn from(value: T) -> Self {
+        Self(value.into())
+    }
 }
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum EndBacktraceType {
+    Fn(Ip),
+    If(Ip, Option<Ip>),
+    While(Ip, Ip),
+}
+
+const KEYWORD: &[&str] = &[
+    "pop", "dup", "over", "+", "%", "if", "else", "while", "do", "fn", "end", "true", "false", "=",
+    "<", ">", "memory", "write", "read", "char", "bool", "dbg", "print", "hlt",
+];
 
 struct LexConf {
     panic_on_first_error: bool,
 }
-fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<Vec<Ops>, ()> {
+fn lex(filename: &str, tokenizer: Vec<Token<'_>>, conf: &LexConf) -> Result<Vec<Ops>, ()> {
     let mut inst: Vec<Ops> = vec![];
 
-    let mut backtraces: Vec<BacktraceType> = vec![];
+    let mut end_backtraces: Vec<EndBacktraceType> = vec![];
 
     let mut last_while_inst: Option<usize> = None;
-    let mut last_if_backtrace: Option<usize> = None;
+    let mut last_if_backtrace_id: Option<usize> = None;
 
     let mut fns: HashMap<&str, usize> = HashMap::new();
-    let mut fns_backtracks: HashMap<&str, Vec<(usize, Loc)>> = HashMap::new();
+    let mut backtrack_patches: HashMap<&str, Vec<(usize, Loc)>> = HashMap::new();
 
     let mut hlt_exist = false;
 
     let mut iter = tokenizer.iter().peekable();
     while let Some(&Token { value, loc }) = iter.next() {
+        // lprintln!(filename, loc, "{value}");
         match value {
             "pop" => inst.push(Ops::Pop),
             "dup" => inst.push(Ops::Dup),
@@ -154,15 +195,16 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<
             "%" => inst.push(Ops::Mod),
 
             "if" => {
-                last_if_backtrace = Some(backtraces.len());
-                backtraces.push(BacktraceType::If(inst.len(), None));
+                last_if_backtrace_id = Some(end_backtraces.len());
+                end_backtraces.push(EndBacktraceType::If(inst.len().into(), None));
                 inst.push(Ops::Nop);
             }
             "else" => {
                 inst.push(Ops::Nop);
-                let backtrace_id = last_if_backtrace.ok_or(()).map_err(|_| {})?;
-                if let BacktraceType::If(if_inst, _else_inst) = backtraces[backtrace_id] {
-                    backtraces[backtrace_id] = BacktraceType::If(if_inst, inst.len().into());
+                let backtrace_id = last_if_backtrace_id.ok_or(()).map_err(|_| {})?;
+                if let EndBacktraceType::If(if_inst, _else_inst) = end_backtraces[backtrace_id] {
+                    let elze = Some(inst.len().into());
+                    end_backtraces[backtrace_id] = EndBacktraceType::If(if_inst, elze);
                 }
                 inst.push(Ops::Nop);
             }
@@ -172,17 +214,18 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<
             "do" => {
                 let last_while_inst = last_while_inst.ok_or(()).map_err(|_| {
                     leprintln!(filename, loc, "do need while");
-                    ()
                 })?;
-                backtraces.push(BacktraceType::While(last_while_inst, inst.len()));
+                end_backtraces.push(EndBacktraceType::While(
+                    last_while_inst.into(),
+                    inst.len().into(),
+                ));
                 inst.push(Ops::Nop);
             }
             "fn" => {
                 // let p = *iter.peek().ok_or(())?;
-                // TODO: add check if it
+                // TODO: add check if it used
                 let name = iter.next().ok_or(()).map_err(|_| {
                     leprintln!(filename, loc, "function must have name");
-                    ()
                 })?;
                 if let Some(in_keyword) = iter.next()
                     && in_keyword.value != "in"
@@ -190,30 +233,43 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<
                     leprintln!(filename, loc, "function must have `in` keyword");
                     return Err(());
                 }
-                fns.insert(&name.value, inst.len() + 1);
-                backtraces.push(BacktraceType::Fn(inst.len()));
+                fns.insert(name.value, inst.len() + 1);
+                end_backtraces.push(EndBacktraceType::Fn(Ip(inst.len())));
                 inst.push(Ops::Nop);
             }
-            "end" => match backtraces
+            "end" => match end_backtraces
                 .pop()
-                .ok_or(0)
+                .ok_or(())
                 .map_err(|_| leprintln!(filename, loc, "end need if/else/while"))?
             {
-                BacktraceType::If(if_inst, None) => {
-                    inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
+                EndBacktraceType::If(if_inst, None) => {
+                    let if_inst = if_inst.0;
+                    let jmp_rel = inst.len() as i64 - if_inst as i64;
+                    inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, Rel(jmp_rel)));
                 }
-                BacktraceType::If(if_inst, Some(else_inst)) => {
-                    inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, else_inst + 1));
-                    inst[else_inst] = Ops::Jmp(Jmp::Abs(inst.len()));
+                EndBacktraceType::If(if_inst, Some(else_inst)) => {
+                    let if_inst = if_inst.0;
+                    let else_inst = else_inst.0;
+                    let jmp_to_else_rel = inst.len() as i64 - if_inst as i64;
+                    inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, Rel(jmp_to_else_rel)));
+
+                    let jmp_rel = inst.len() as i64 - else_inst as i64 - 2;
+                    inst[else_inst] = Ops::Jmp(Jmp::Rel(Rel(jmp_rel)));
                 }
-                BacktraceType::While(while_addr, do_addr) => {
-                    inst.push(Ops::Jmp(Jmp::Abs(while_addr)));
+                EndBacktraceType::While(while_addr, do_addr) => {
+                    let while_addr = while_addr.0;
+                    let do_addr = do_addr.0;
+                    let jmp_rel = while_addr as i64 - inst.len() as i64;
+                    inst.push(Ops::Jmp(Jmp::Rel(Rel(jmp_rel))));
                     inst.push(Ops::Nop);
-                    inst[do_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, inst.len()));
+                    let jmp_do_addr = inst.len() as i64 - do_addr as i64;
+                    inst[do_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, Rel(jmp_do_addr)));
                 }
-                BacktraceType::Fn(fn_inst) => {
+                EndBacktraceType::Fn(fn_inst) => {
+                    let fn_inst = fn_inst.0;
                     inst.push(Ops::FnRet);
-                    inst[fn_inst] = Ops::Jmp(Jmp::Abs(inst.len()));
+                    let jmp_rel = inst.len() as i64 - fn_inst as i64;
+                    inst[fn_inst] = Ops::Jmp(Jmp::Rel(Rel(jmp_rel)));
                 }
             },
 
@@ -240,22 +296,17 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<
             }
 
             _ => {
-                if let Some(&id) = fns.get(value) {
-                    inst.push(Ops::FnCall(id));
-                    // TODO: verify if it's possible remove that nop
-                    inst.push(Ops::Nop);
-                } else if value.ends_with("i")
+                if value.ends_with('i')
                     && let Ok(ops) = value[..value.len() - 1].parse::<i32>().map_err(|_| {
                         leprintln!(filename, loc, "invalid integer, got: {}", value);
-                        ()
                     })
                 {
                     inst.push(Ops::Push(Val::Int(ops)));
                 } else {
-                    if let Some(fns_backtrack) = fns_backtracks.get_mut(value) {
-                        fns_backtrack.push((inst.len(), loc));
+                    if let Some(backtrack_patch_list) = backtrack_patches.get_mut(value) {
+                        backtrack_patch_list.push((inst.len(), loc));
                     } else {
-                        fns_backtracks.insert(value, vec![(inst.len(), loc)]);
+                        backtrack_patches.insert(value, vec![(inst.len(), loc)]);
                     }
                     inst.push(Ops::Nop);
                     inst.push(Ops::Nop);
@@ -265,7 +316,7 @@ fn lex<'a>(filename: &str, tokenizer: Vec<Token<'a>>, conf: &LexConf) -> Result<
     }
 
     let mut any_fns_backtrack_error = false;
-    for (name, fns_backtrack_insts) in fns_backtracks {
+    for (name, fns_backtrack_insts) in backtrack_patches {
         let fn_inst = fns.get(name);
         for (fns_backtrack_inst, loc) in fns_backtrack_insts {
             if let Some(fn_inst) = fn_inst {
@@ -303,6 +354,9 @@ impl VM {
     fn goto(&mut self, addr: usize) {
         self.ip = addr;
     }
+    fn goto_rel(&mut self, addr: i64) {
+        self.ip = (self.ip as i64 + addr) as usize;
+    }
     fn in_bound_ip(&self) -> bool {
         let c = self.ip < self.inst.len();
         assert!(c, "IP out of bounds");
@@ -330,18 +384,17 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
             Ops::Dup => {
                 let val = stack.last().expect("Stack underflow - Dup needs 1 value");
                 let val = match val {
-                    Val::Int(_) => val.clone(),
-                    Val::Bool(_) => val.clone(),
-                    Val::Char(_) => val.clone(),
+                    Val::Int(_) => *val,
+                    Val::Bool(_) => *val,
+                    Val::Char(_) => *val,
                     Val::Addr(_) => todo!(),
                 };
                 stack.push(val);
             }
             Ops::Over => {
-                let v = stack
+                let v = *stack
                     .get(stack.len() - 2)
-                    .expect("Stack underflow - Over needs 2 values")
-                    .clone();
+                    .expect("Stack underflow - Over needs 2 values");
                 stack.push(v);
             }
 
@@ -379,7 +432,6 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
                 // println!("{:?}", stacktrace);
                 let ret_to_inst = stacktrace.pop().ok_or(()).map_err(|_| {
                     eprintln!("Ip:{} - Stacktrace underflow ", vm.ip);
-                    ()
                 })?;
                 vm.goto(ret_to_inst + 1);
                 continue;
@@ -393,8 +445,8 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
                 }
                 println!();
             }
-            Ops::Jmp(Jmp::Abs(addr)) => {
-                vm.goto(*addr);
+            Ops::Jmp(Jmp::Rel(addr)) => {
+                vm.goto_rel(addr.0);
                 continue;
             }
             Ops::Jmp(Jmp::Cond(c, addr)) => {
@@ -404,7 +456,7 @@ fn interpret(inst: Vec<Ops>) -> Result<(VM, Vec<Val>), ()> {
 
                 match (c, v) {
                     (JmpCond::True, Val::Bool(true)) | (JmpCond::False, Val::Bool(false)) => {
-                        vm.goto(*addr);
+                        vm.goto_rel(addr.0);
                         continue;
                     }
                     (_, Val::Bool(_)) => {
@@ -554,12 +606,12 @@ fn start() -> Result<(), ()> {
         eprintln!("Error: {:?}", err);
     })?;
 
-    println!("------------");
+    // println!("------------");
     let mut tokenizer = Tokenizer::new(&s);
     let token = tokenizer.to_vec();
-    token
-        .iter()
-        .for_each(|t| lprintln!(path, t.loc, "`{}`", t.value));
+    // token
+    //     .iter()
+    //     .for_each(|t| lprintln!(path, t.loc, "`{}`", t.value));
 
     println!("------------");
     let inst = lex(
@@ -572,14 +624,14 @@ fn start() -> Result<(), ()> {
     inst.iter()
         .enumerate()
         .for_each(|(i, s)| println!("{i:>2}: {s:?}"));
-
+    // return Err(());
     println!("------------");
     let (vm, stack) = interpret(inst)?;
 
     println!("------------");
     println!("ip: {}", vm.ip);
     println!("stack: {:?}", stack);
-    return Ok(());
+    Ok(())
 }
 
 fn main() {

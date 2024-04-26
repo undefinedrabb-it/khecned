@@ -46,7 +46,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn to_vec<'n>(&'n mut self) -> Vec<Token<'n>> {
+    pub fn to_vec(&mut self) -> Vec<Token<'_>> {
         self.collect::<Vec<_>>()
     }
 
