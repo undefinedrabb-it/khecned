@@ -170,7 +170,52 @@ const KEYWORD: &[&str] = &[
 struct LexConf {
     panic_on_first_error: bool,
 }
-fn lex(filename: &str, tokenizer: Vec<Token<'_>>, conf: &LexConf) -> Result<Vec<Ops>, ()> {
+fn lex_ops(value: &str, filename: &str, loc: Loc) -> Option<Ops> {
+    match value {
+        "pop" => Some(Ops::Pop),
+        "dup" => Some(Ops::Dup),
+        "over" => Some(Ops::Over),
+
+        "+" => Some(Ops::Add),
+        "%" => Some(Ops::Mod),
+
+        "true" => Some(Ops::Push(Val::Bool(true))),
+        "false" => Some(Ops::Push(Val::Bool(false))),
+
+        "=" => Some(Ops::Compare(CompareType::Eq)),
+        "<" => Some(Ops::Compare(CompareType::Lt)),
+        ">" => Some(Ops::Compare(CompareType::Gt)),
+
+        "memory" => Some(Ops::Memory),
+        "write" => Some(Ops::MemoryWrite),
+        "read" => Some(Ops::MemoryRead),
+
+        "char" => Some(Ops::Cast(CastType::Char)),
+        "bool" => Some(Ops::Cast(CastType::Bool)),
+
+        "dbg" => Some(Ops::Dbg),
+        "print" => Some(Ops::Print),
+
+        _ => {
+            if value.ends_with('i')
+                && let Ok(ops) = value[..value.len() - 1].parse::<i32>().map_err(|_| {
+                    // verify if it's needed
+                    leprintln!(filename, loc, "invalid integer, got: {}", value);
+                })
+            {
+                Some(Ops::Push(Val::Int(ops)))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn lex_control_flow<'a>(
+    filename: &str,
+    iter: impl Iterator<Item = &'a Token<'a>>,
+    conf: &LexConf,
+) -> Result<Vec<Ops>, ()> {
     let mut inst: Vec<Ops> = vec![];
 
     let mut end_backtraces: Vec<EndBacktraceType> = vec![];
@@ -183,17 +228,16 @@ fn lex(filename: &str, tokenizer: Vec<Token<'_>>, conf: &LexConf) -> Result<Vec<
 
     let mut hlt_exist = false;
 
-    let mut iter = tokenizer.iter().peekable();
+    let mut iter = iter.peekable();
     while let Some(&Token { value, loc }) = iter.next() {
         // lprintln!(filename, loc, "{value}");
+
+        if let Some(op) = lex_ops(value, filename, loc) {
+            inst.push(op);
+            continue;
+        }
+
         match value {
-            "pop" => inst.push(Ops::Pop),
-            "dup" => inst.push(Ops::Dup),
-            "over" => inst.push(Ops::Over),
-
-            "+" => inst.push(Ops::Add),
-            "%" => inst.push(Ops::Mod),
-
             "if" => {
                 last_if_backtrace_id = Some(end_backtraces.len());
                 end_backtraces.push(EndBacktraceType::If(inst.len().into(), None));
@@ -242,53 +286,30 @@ fn lex(filename: &str, tokenizer: Vec<Token<'_>>, conf: &LexConf) -> Result<Vec<
                 .ok_or(())
                 .map_err(|_| leprintln!(filename, loc, "end need if/else/while"))?
             {
-                EndBacktraceType::If(if_inst, None) => {
-                    let if_inst = if_inst.0;
+                EndBacktraceType::If(Ip(if_inst), None) => {
                     let jmp_rel = inst.len() as i64 - if_inst as i64;
                     inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, Rel(jmp_rel)));
                 }
-                EndBacktraceType::If(if_inst, Some(else_inst)) => {
-                    let if_inst = if_inst.0;
-                    let else_inst = else_inst.0;
+                EndBacktraceType::If(Ip(if_inst), Some(Ip(else_inst))) => {
                     let jmp_to_else_rel = inst.len() as i64 - if_inst as i64;
                     inst[if_inst] = Ops::Jmp(Jmp::Cond(JmpCond::False, Rel(jmp_to_else_rel)));
 
                     let jmp_rel = inst.len() as i64 - else_inst as i64 - 2;
                     inst[else_inst] = Ops::Jmp(Jmp::Rel(Rel(jmp_rel)));
                 }
-                EndBacktraceType::While(while_addr, do_addr) => {
-                    let while_addr = while_addr.0;
-                    let do_addr = do_addr.0;
+                EndBacktraceType::While(Ip(while_addr), Ip(do_addr)) => {
                     let jmp_rel = while_addr as i64 - inst.len() as i64;
                     inst.push(Ops::Jmp(Jmp::Rel(Rel(jmp_rel))));
                     inst.push(Ops::Nop);
                     let jmp_do_addr = inst.len() as i64 - do_addr as i64;
                     inst[do_addr] = Ops::Jmp(Jmp::Cond(JmpCond::False, Rel(jmp_do_addr)));
                 }
-                EndBacktraceType::Fn(fn_inst) => {
-                    let fn_inst = fn_inst.0;
+                EndBacktraceType::Fn(Ip(fn_inst)) => {
                     inst.push(Ops::FnRet);
                     let jmp_rel = inst.len() as i64 - fn_inst as i64;
                     inst[fn_inst] = Ops::Jmp(Jmp::Rel(Rel(jmp_rel)));
                 }
             },
-
-            "true" => inst.push(Ops::Push(Val::Bool(true))),
-            "false" => inst.push(Ops::Push(Val::Bool(false))),
-
-            "=" => inst.push(Ops::Compare(CompareType::Eq)),
-            "<" => inst.push(Ops::Compare(CompareType::Lt)),
-            ">" => inst.push(Ops::Compare(CompareType::Gt)),
-
-            "memory" => inst.push(Ops::Memory),
-            "write" => inst.push(Ops::MemoryWrite),
-            "read" => inst.push(Ops::MemoryRead),
-
-            "char" => inst.push(Ops::Cast(CastType::Char)),
-            "bool" => inst.push(Ops::Cast(CastType::Bool)),
-
-            "dbg" => inst.push(Ops::Dbg),
-            "print" => inst.push(Ops::Print),
 
             "hlt" => {
                 hlt_exist = true;
@@ -296,21 +317,13 @@ fn lex(filename: &str, tokenizer: Vec<Token<'_>>, conf: &LexConf) -> Result<Vec<
             }
 
             _ => {
-                if value.ends_with('i')
-                    && let Ok(ops) = value[..value.len() - 1].parse::<i32>().map_err(|_| {
-                        leprintln!(filename, loc, "invalid integer, got: {}", value);
-                    })
-                {
-                    inst.push(Ops::Push(Val::Int(ops)));
+                if let Some(backtrack_patch_list) = backtrack_patches.get_mut(value) {
+                    backtrack_patch_list.push((inst.len(), loc));
                 } else {
-                    if let Some(backtrack_patch_list) = backtrack_patches.get_mut(value) {
-                        backtrack_patch_list.push((inst.len(), loc));
-                    } else {
-                        backtrack_patches.insert(value, vec![(inst.len(), loc)]);
-                    }
-                    inst.push(Ops::Nop);
-                    inst.push(Ops::Nop);
+                    backtrack_patches.insert(value, vec![(inst.len(), loc)]);
                 }
+                inst.push(Ops::Nop);
+                inst.push(Ops::Nop);
             }
         }
     }
@@ -332,6 +345,7 @@ fn lex(filename: &str, tokenizer: Vec<Token<'_>>, conf: &LexConf) -> Result<Vec<
             }
         }
     }
+
     if any_fns_backtrack_error {
         return Err(());
     }
@@ -614,9 +628,9 @@ fn start() -> Result<(), ()> {
     //     .for_each(|t| lprintln!(path, t.loc, "`{}`", t.value));
 
     println!("------------");
-    let inst = lex(
+    let inst = lex_control_flow(
         path,
-        token,
+        token.iter(),
         &LexConf {
             panic_on_first_error: false,
         },
